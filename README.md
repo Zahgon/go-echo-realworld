@@ -25,7 +25,7 @@ This is an example of implementation of Real World Application [backend-specs](h
   - [x] [SOLID Principle](https://en.wikipedia.org/wiki/SOLID)
   - [x] Database Transaction
 - HTTP Server
-  - [x] [Echo framework](https://echo.labstack.com/)
+  - [x] [chi router](https://go-chi.io/)
   - [x] Server Side Caching
     - [ ] Cache but revalidate (Header `Cache-Control: no-cache`)
     - [ ] Set Expiration Time (Header `Cache-Control: max-age=120`)

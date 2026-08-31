@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 
@@ -10,16 +11,17 @@ import (
 
 	"github.com/DoWithLogic/go-echo-realworld/config"
 	"github.com/DoWithLogic/go-echo-realworld/pkg/datasource"
+	"github.com/DoWithLogic/go-echo-realworld/pkg/httpx"
 	"github.com/DoWithLogic/go-echo-realworld/pkg/otel/zerolog"
+	"github.com/go-chi/chi/v5"
 	"github.com/jmoiron/sqlx"
-	"github.com/labstack/echo/v4"
 )
 
 type App struct {
-	DB   *sqlx.DB
-	Echo *echo.Echo
-	Log  *zerolog.Logger
-	Cfg  config.Config
+	DB     *sqlx.DB
+	Router *chi.Mux
+	Log    *zerolog.Logger
+	Cfg    config.Config
 }
 
 func NewApp(ctx context.Context, cfg config.Config) *App {
@@ -29,10 +31,10 @@ func NewApp(ctx context.Context, cfg config.Config) *App {
 	}
 
 	return &App{
-		DB:   db,
-		Echo: echo.New(),
-		Log:  zerolog.NewZeroLog(ctx, os.Stdout),
-		Cfg:  cfg,
+		DB:     db,
+		Router: httpx.NewRouter(cfg.Server.Debug),
+		Log:    zerolog.NewZeroLog(ctx, os.Stdout),
+		Cfg:    cfg,
 	}
 }
 
@@ -43,11 +45,19 @@ func (app *App) Start() error {
 		return err
 	}
 
-	app.Echo.Debug = app.Cfg.Server.Debug
-
-	return app.Echo.StartServer(&http.Server{
+	server := &http.Server{
 		Addr:         fmt.Sprintf(":%s", app.Cfg.Server.Port),
 		ReadTimeout:  app.Cfg.Server.ReadTimeout,
 		WriteTimeout: app.Cfg.Server.WriteTimeout,
-	})
+		Handler:      app.Router,
+	}
+
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("⇨ http server started on %s\n", listener.Addr())
+
+	return server.Serve(listener)
 }

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -8,8 +9,8 @@ import (
 	"github.com/dgrijalva/jwt-go"
 
 	"github.com/DoWithLogic/go-echo-realworld/config"
+	"github.com/DoWithLogic/go-echo-realworld/pkg/httpx"
 	"github.com/DoWithLogic/go-echo-realworld/pkg/utils/response"
-	"github.com/labstack/echo/v4"
 )
 
 // CustomClaims represents the custom claims you want to include in the JWT payload.
@@ -17,6 +18,19 @@ type CustomClaims struct {
 	UserID int64  `json:"user_id"`
 	Email  string `json:"email"`
 	jwt.StandardClaims
+}
+
+type identityCtxKey struct{}
+
+// Identity returns the claims the auth middleware attached to the request, or
+// nil when the request was not authenticated.
+func Identity(ctx context.Context) *CustomClaims {
+	claims, _ := ctx.Value(identityCtxKey{}).(*CustomClaims)
+	return claims
+}
+
+func withIdentity(r *http.Request, claims *CustomClaims) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), identityCtxKey{}, claims))
 }
 
 func GenerateJWT(data CustomClaims, secretKey string) (string, error) {
@@ -32,13 +46,14 @@ func GenerateJWT(data CustomClaims, secretKey string) (string, error) {
 	return tokenString, nil
 }
 
-func OptionalAuthJWT(cfg config.Config) echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			if c.Request().Header.Get("Authorization") != "" {
-				auth, err := extractBearerToken(c)
+func OptionalAuthJWT(cfg config.Config) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "" {
+				auth, err := extractBearerToken(r)
 				if err != nil {
-					return c.JSON(http.StatusUnauthorized, response.NewResponseError(http.StatusUnauthorized, response.MsgFailed, err.Error()))
+					httpx.JSON(w, r, http.StatusUnauthorized, response.NewResponseError(http.StatusUnauthorized, response.MsgFailed, err.Error()))
+					return
 				}
 
 				token, err := jwt.ParseWithClaims(*auth, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
@@ -46,29 +61,33 @@ func OptionalAuthJWT(cfg config.Config) echo.MiddlewareFunc {
 				})
 
 				if err != nil {
-					return c.JSON(http.StatusUnauthorized, response.NewResponseError(http.StatusUnauthorized, response.MsgFailed, err.Error()))
+					httpx.JSON(w, r, http.StatusUnauthorized, response.NewResponseError(http.StatusUnauthorized, response.MsgFailed, err.Error()))
+					return
 				}
 
 				if claims, ok := token.Claims.(*CustomClaims); ok && token.Valid {
-					c.Set("identity", claims)
+					next.ServeHTTP(w, withIdentity(r, claims))
 
-					return next(c)
+					return
 				}
 
-				return c.JSON(http.StatusUnauthorized, response.NewResponseError(http.StatusUnauthorized, response.MsgFailed, err.Error()))
+				httpx.JSON(w, r, http.StatusUnauthorized, response.NewResponseError(http.StatusUnauthorized, response.MsgFailed, err.Error()))
+
+				return
 			}
 
-			return next(c)
-		}
+			next.ServeHTTP(w, r)
+		})
 	}
 }
 
-func AuthorizeJWT(cfg config.Config) echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			auth, err := extractBearerToken(c)
+func AuthorizeJWT(cfg config.Config) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			auth, err := extractBearerToken(r)
 			if err != nil {
-				return c.JSON(http.StatusUnauthorized, response.NewResponseError(http.StatusUnauthorized, response.MsgFailed, err.Error()))
+				httpx.JSON(w, r, http.StatusUnauthorized, response.NewResponseError(http.StatusUnauthorized, response.MsgFailed, err.Error()))
+				return
 			}
 
 			token, err := jwt.ParseWithClaims(*auth, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
@@ -76,22 +95,23 @@ func AuthorizeJWT(cfg config.Config) echo.MiddlewareFunc {
 			})
 
 			if err != nil {
-				return c.JSON(http.StatusUnauthorized, response.NewResponseError(http.StatusUnauthorized, response.MsgFailed, err.Error()))
+				httpx.JSON(w, r, http.StatusUnauthorized, response.NewResponseError(http.StatusUnauthorized, response.MsgFailed, err.Error()))
+				return
 			}
 
 			if claims, ok := token.Claims.(*CustomClaims); ok && token.Valid {
-				c.Set("identity", claims)
+				next.ServeHTTP(w, withIdentity(r, claims))
 
-				return next(c)
+				return
 			}
 
-			return c.JSON(http.StatusUnauthorized, response.NewResponseError(http.StatusUnauthorized, response.MsgFailed, err.Error()))
-		}
+			httpx.JSON(w, r, http.StatusUnauthorized, response.NewResponseError(http.StatusUnauthorized, response.MsgFailed, err.Error()))
+		})
 	}
 }
 
-func extractBearerToken(c echo.Context) (*string, error) {
-	authData := c.Request().Header.Get("Authorization")
+func extractBearerToken(r *http.Request) (*string, error) {
+	authData := r.Header.Get("Authorization")
 	if authData == "" {
 		return nil, errors.New("authorization can't be nil")
 	}
